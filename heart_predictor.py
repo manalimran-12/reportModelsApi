@@ -115,9 +115,15 @@ class HeartDiseasePredictor:
             if input_df is None:
                 raise ValueError("Could not convert features to model input format")
 
-            prediction = self.model.predict(input_df)
-            result = "Heart Disease" if prediction[0] == 1 else "No Heart Disease"
-            return result
+            prediction = self.model.predict(input_df)[0]
+            if hasattr(self.model, 'predict_proba'):
+                proba = self.model.predict_proba(input_df)[0]
+                confidence = float(proba[1]) if len(proba) > 1 else float(proba[0])
+            else:
+                confidence = None
+
+            result = "Heart Disease" if prediction == 1 else "No Heart Disease"
+            return result, confidence
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
-            return None
+            return None, None

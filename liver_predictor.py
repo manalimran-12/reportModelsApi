@@ -6,81 +6,22 @@ import pickle
 import re
 import os
 from sklearn.preprocessing import StandardScaler
-import joblib
-import tempfile
-import shutil
 
 # Configure Tesseract path
 TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 class LiverDiseasePredictor:
-   def __init__(self, model_path='models/liver.pkl'):
-    try:
-        # First try loading with joblib which is safer for sklearn models
-        try:
-            self.model = joblib.load(model_path)
-        except Exception as joblib_error:
-            print(f"Joblib loading failed: {str(joblib_error)}")
-            
-            # If joblib fails, try pickle with sklearn version compatibility fix
-            with open(model_path, 'rb') as f:
-                model_data = pickle.load(f)
-                
-                # Handle scikit-learn version incompatibility
-                if hasattr(model_data, 'tree_'):
-                    try:
-                        # Check if tree has the expected structure
-                        tree_node_dtype = model_data.tree_.__getstate__()['nodes'].dtype
-                        
-                        # If missing the 'missing_go_to_left' field, we need to add it
-                        if 'missing_go_to_left' not in tree_node_dtype.names:
-                            print("Fixing missing field in decision tree nodes")
-                            
-                            # Get the original nodes
-                            nodes = model_data.tree_.__getstate__()['nodes']
-                            
-                            # Create array with new dtype that includes missing field
-                            new_dtype = np.dtype([
-                                ('left_child', '<i8'),
-                                ('right_child', '<i8'),
-                                ('feature', '<i8'),
-                                ('threshold', '<f8'),
-                                ('impurity', '<f8'),
-                                ('n_node_samples', '<i8'),
-                                ('weighted_n_node_samples', '<f8'),
-                                ('missing_go_to_left', 'u1')
-                            ])
-                            
-                            # Create new nodes array with updated dtype
-                            new_nodes = np.zeros(nodes.shape, dtype=new_dtype)
-                            
-                            # Copy values from old array to new array
-                            for field in nodes.dtype.names:
-                                new_nodes[field] = nodes[field]
-                                
-                            # Set default value for missing field (usually False/0)
-                            new_nodes['missing_go_to_left'] = 0
-                            
-                            # Update tree nodes
-                            model_data.tree_.__getstate__()['nodes'] = new_nodes
-                    except Exception as dtype_err:
-                        print(f"Error fixing dtype: {str(dtype_err)}")
-                
-                self.model = model_data
+    def __init__(self, model_path='models/liver.pkl'):
+        with open(model_path, 'rb') as f:
+            self.model = pickle.load(f)
 
         self.required_features = [
             'Age', 'Gender', 'Total_Bilirubin', 'Direct_Bilirubin', 'Alkaline_Phosphotase',
             'Alamine_Aminotransferase', 'Aspartate_Aminotransferase', 'Total_Protiens',
             'Albumin', 'Albumin_and_Globulin_Ratio'
         ]
-        
-        # Create a mapping for gender
-        self.gender_mapping = {'Male': 1, 'Female': 0}
-        
-    except Exception as e:
-        print(f"Error initializing predictor: {str(e)}")
-        raise
+
     def preprocess_image(self, image_path):
         try:
             img = cv2.imread(image_path)
@@ -126,7 +67,7 @@ class LiverDiseasePredictor:
                 'Total_Bilirubin': [r'total.*bill?rubin[\s:]*([\d.]+)'],
                 'Direct_Bilirubin': [
                     r'direct.*bill?rubin[\s:]*([\d.]+)',
-                    r'total.*bill?rubin.*?([\d.]+)\s+([\d.]+)'  # fallback to get 2nd number
+                    r'total.*bill?rubin.*?([\d.]+)\s+([\d.]+)'
                 ],
                 'Alkaline_Phosphotase': [r'alkaline.*phosph[ao]tase[\s:]*([\d.]+)'],
                 'Alamine_Aminotransferase': [r'alamine.*aminotransferase[\s:]*([\d.]+)'],
@@ -195,24 +136,16 @@ class LiverDiseasePredictor:
             if input_df is None:
                 raise ValueError("Could not convert features to model input format")
 
-            # Get raw prediction
-            prediction_value = self.model.predict(input_df)[0]
-            
-            # Get probabilities for confidence score if possible
-            confidence = 0.0
-            try:
-                if hasattr(self.model, 'predict_proba'):
-                    probs = self.model.predict_proba(input_df)[0]
-                    confidence = probs[1] if prediction_value == 1 else probs[0]
-                else:
-                    confidence = 0.8  # Fallback confidence if no probabilities
-            except:
-                confidence = 0.7  # Default confidence on error
-        
-        # Format the output to match what the API expects
-            result = "Liver Disease" if prediction_value == 1 else "No Liver Disease"
+            prediction = self.model.predict(input_df)[0]
+            if hasattr(self.model, 'predict_proba'):
+                proba = self.model.predict_proba(input_df)[0]
+                # For binary classification, proba[1] is the confidence for class 1
+                confidence = float(proba[1]) if len(proba) > 1 else float(proba[0])
+            else:
+                confidence = None
+
+            result = "Liver Disease" if prediction == 1 else "No Liver Disease"
             return result, confidence
-        
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
-            return None
+            return None, None
