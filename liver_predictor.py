@@ -6,9 +6,13 @@ import pickle
 import re
 import os
 from sklearn.preprocessing import StandardScaler
+from explanations import compute_shap_explanation
 
-# Configure Tesseract path
-TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Configure Tesseract path (can be overridden via TESSERACT_PATH env var)
+TESSERACT_PATH = os.environ.get(
+    'TESSERACT_PATH',
+    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+)
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 class LiverDiseasePredictor:
@@ -87,7 +91,6 @@ class LiverDiseasePredictor:
                 matches = re.findall(pattern, text)
                 for match in matches:
                     try:
-                        # If pattern returns a tuple (like for two numbers), take second one
                         if isinstance(match, tuple):
                             val = float(match[1])
                         else:
@@ -139,13 +142,24 @@ class LiverDiseasePredictor:
             prediction = self.model.predict(input_df)[0]
             if hasattr(self.model, 'predict_proba'):
                 proba = self.model.predict_proba(input_df)[0]
-                # For binary classification, proba[1] is the confidence for class 1
                 confidence = float(proba[1]) if len(proba) > 1 else float(proba[0])
             else:
                 confidence = None
 
             result = "Liver Disease" if prediction == 1 else "No Liver Disease"
-            return result, confidence
+
+            shap_rows = compute_shap_explanation(self.model, input_df, top_k=6)
+            explanation = None
+            if shap_rows:
+                explanation = {
+                    "type": "shap",
+                    "features": shap_rows,
+                    "description": (
+                        "Each bar shows how much a liver panel value pushed the prediction toward "
+                        "Liver Disease (positive) or No Liver Disease (negative)."
+                    ),
+                }
+            return result, confidence, explanation
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
-            return None, None
+            return None, None, None

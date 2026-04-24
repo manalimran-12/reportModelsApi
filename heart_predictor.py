@@ -5,9 +5,13 @@ import numpy as np
 import pickle
 import re
 import os
+from explanations import compute_shap_explanation
 
-# Configure Tesseract path
-TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Configure Tesseract path (can be overridden via TESSERACT_PATH env var)
+TESSERACT_PATH = os.environ.get(
+    'TESSERACT_PATH',
+    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+)
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 class HeartDiseasePredictor:
@@ -47,7 +51,6 @@ class HeartDiseasePredictor:
 
     def _extract_feature_value(self, text, feature_name, used_values):
         try:
-            # Define regex patterns for each feature
             patterns = {
                 'age': [r'age[\s:]*([\d.]+)'],
                 'sex': [r'sex[\s:]*([\d.]+)', r'male', r'female'],
@@ -123,7 +126,19 @@ class HeartDiseasePredictor:
                 confidence = None
 
             result = "Heart Disease" if prediction == 1 else "No Heart Disease"
-            return result, confidence
+
+            shap_rows = compute_shap_explanation(self.model, input_df, top_k=6)
+            explanation = None
+            if shap_rows:
+                explanation = {
+                    "type": "shap",
+                    "features": shap_rows,
+                    "description": (
+                        "Each bar shows how much a clinical value pushed the prediction toward "
+                        "Heart Disease (positive) or No Heart Disease (negative)."
+                    ),
+                }
+            return result, confidence, explanation
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
-            return None, None
+            return None, None, None

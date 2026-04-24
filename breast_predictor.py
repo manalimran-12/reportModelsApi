@@ -6,9 +6,13 @@ import pickle
 import re
 import os
 from sklearn.preprocessing import StandardScaler
+from explanations import compute_shap_explanation
 
-# Configure Tesseract path
-TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Configure Tesseract path (can be overridden via TESSERACT_PATH env var)
+TESSERACT_PATH = os.environ.get(
+    'TESSERACT_PATH',
+    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+)
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 class BreastCancerPredictor:
@@ -112,7 +116,19 @@ class BreastCancerPredictor:
                 confidence = None
 
             result = "Malignant" if prediction == 1 else "Benign"
-            return result, confidence
+
+            shap_rows = compute_shap_explanation(self.model, input_df, top_k=6)
+            explanation = None
+            if shap_rows:
+                explanation = {
+                    "type": "shap",
+                    "features": shap_rows,
+                    "description": (
+                        "Each bar shows how much a lab value pushed the prediction toward "
+                        "Malignant (positive) or Benign (negative)."
+                    ),
+                }
+            return result, confidence, explanation
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
-            return None, None
+            return None, None, None
