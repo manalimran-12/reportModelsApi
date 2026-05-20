@@ -4,16 +4,9 @@ import pandas as pd
 import numpy as np
 import pickle
 import re
-import os
 from sklearn.preprocessing import StandardScaler
 from explanations import compute_shap_explanation
-
-# Configure Tesseract path (can be overridden via TESSERACT_PATH env var)
-TESSERACT_PATH = os.environ.get(
-    'TESSERACT_PATH',
-    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-)
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+from ocr_utils import OCRConfigurationError, configure_tesseract
 
 class LiverDiseasePredictor:
     def __init__(self, model_path='models/liver.pkl'):
@@ -25,86 +18,97 @@ class LiverDiseasePredictor:
             'Alamine_Aminotransferase', 'Aspartate_Aminotransferase', 'Total_Protiens',
             'Albumin', 'Albumin_and_Globulin_Ratio'
         ]
+        self.min_feature_count = 7
+
+    def _normalize_ocr_text(self, text):
+        text = text.lower()
+        text = text.replace("|", " ")
+        text = re.sub(r'[^\w\s\.:/\-]', ' ', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = re.sub(r'\n+', '\n', text)
+        return text.strip()
+
+    def _extract_numeric_after_label(self, line, label_pattern):
+        match = re.search(label_pattern, line)
+        if not match:
+            return None
+
+        tail = line[match.end():]
+        numbers = re.findall(r'\d+(?:\.\d+)?', tail)
+        if not numbers:
+            return None
+
+        # Lab rows usually contain result first and reference range after it.
+        # We prefer the first number unless it looks like a range fragment.
+        return float(numbers[0])
+
+    def _extract_age_gender(self, text):
+        features = {}
+        match = re.search(r'age\s*/?\s*gender\s*:?\s*(\d+(?:\.\d+)?)\s*/?\s*(male|female)', text)
+        if match:
+            features['Age'] = float(match.group(1))
+            features['Gender'] = 1 if match.group(2) == 'male' else 0
+        return features
+
+    def _extract_liver_panel_features(self, text):
+        features = self._extract_age_gender(text)
+
+        line_patterns = {
+            'Total_Bilirubin': r'(?:bilirubin|cilirubin)\s+total',
+            'Direct_Bilirubin': r'(?:bilirubin|cilirubin)\s+direct',
+            'Alamine_Aminotransferase': r'sgpt|alt',
+            'Aspartate_Aminotransferase': r'sgot|ast',
+            'Alkaline_Phosphotase': r'alkaline\s+phosphatase',
+            'Total_Protiens': r'total\s+proteins?',
+            'Albumin': r'albumin|aldumsn|atbumin',
+            'Albumin_and_Globulin_Ratio': r'a\s*:?\s*g\s*ratio|a:g\s*ratio',
+        }
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            for feature_name, label_pattern in line_patterns.items():
+                if feature_name in features:
+                    continue
+                value = self._extract_numeric_after_label(line, label_pattern)
+                if value is None:
+                    continue
+
+                if feature_name == 'Total_Protiens' and value > 10:
+                    value = value / 10
+
+                features[feature_name] = value
+
+        return features
 
     def preprocess_image(self, image_path):
         try:
+            configure_tesseract()
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError("Could not read image file")
 
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                           cv2.THRESH_BINARY, 11, 2)
-            kernel = np.ones((2, 2), np.uint8)
-            dilated = cv2.dilate(thresh, kernel, iterations=1)
+            upscaled = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            thresh = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
             config = r'--oem 3 --psm 6 -l eng'
-            text = pytesseract.image_to_string(dilated, config=config)
-
-            text = text.lower()
-            text = re.sub(r'[^a-zA-Z0-9\s\.:]', ' ', text)
-            text = re.sub(r'\s+', ' ', text).strip()
-
-            return text
+            text = pytesseract.image_to_string(thresh, config=config)
+            return self._normalize_ocr_text(text)
+        except OCRConfigurationError:
+            raise
         except Exception as e:
             print(f"Error processing image: {str(e)}")
             return None
 
     def _extract_feature_value(self, text, feature_name, used_values):
         try:
-            text = text.lower()
-            text = re.sub(r'[^a-zA-Z0-9\s\.:]', ' ', text)
-            text = re.sub(r'\s+', ' ', text).strip()
-
-            # Special case for Gender
-            if feature_name == 'Gender':
-                if 'male' in text:
-                    return 1
-                elif 'female' in text:
-                    return 0
-                else:
-                    return None
-
-            # Improved fuzzy regex map
-            patterns = {
-                'Age': [r'age[\s:]*([\d.]+)'],
-                'Total_Bilirubin': [r'total.*bill?rubin[\s:]*([\d.]+)'],
-                'Direct_Bilirubin': [
-                    r'direct.*bill?rubin[\s:]*([\d.]+)',
-                    r'total.*bill?rubin.*?([\d.]+)\s+([\d.]+)'
-                ],
-                'Alkaline_Phosphotase': [r'alkaline.*phosph[ao]tase[\s:]*([\d.]+)'],
-                'Alamine_Aminotransferase': [r'alamine.*aminotransferase[\s:]*([\d.]+)'],
-                'Aspartate_Aminotransferase': [
-                    r'aspartate.*aminotransferase[\s:]*([\d.]+)',
-                    r'alt.*sgpt[\s:]*([\d.]+)'
-                ],
-                'Total_Protiens': [r'total.*proteins[\s:]*([\d.]+)', r'total.*protiens[\s:]*([\d.]+)'],
-                'Albumin': [r'albumin[\s:]*([\d.]+)', r'atbumin[\s:]*([\d.]+)'],
-                'Albumin_and_Globulin_Ratio': [
-                    r'albumin.*globulin.*ratio[\s:]*([\d.]+)',
-                    r'globulin.*ratio[\s:]*([\d.]+)'
-                ]
-            }
-
-            for pattern in patterns.get(feature_name, []):
-                matches = re.findall(pattern, text)
-                for match in matches:
-                    try:
-                        if isinstance(match, tuple):
-                            val = float(match[1])
-                        else:
-                            val = float(match)
-
-                        # Fix over-detected protein like "74" -> "7.4"
-                        if feature_name == 'Total_Protiens' and val > 10:
-                            val = val / 10
-
-                        if val not in used_values:
-                            used_values.add(val)
-                            return val
-                    except:
-                        continue
+            features = self._extract_liver_panel_features(text)
+            val = features.get(feature_name)
+            if val is not None and val not in used_values:
+                used_values.add(val)
+                return val
             return None
         except Exception as e:
             print(f"Error extracting feature {feature_name}: {str(e)}")
@@ -125,15 +129,14 @@ class LiverDiseasePredictor:
             if not text:
                 raise ValueError("Could not extract text from image")
 
-            features = {}
-            used_values = set()
-            for feature in self.required_features:
-                value = self._extract_feature_value(text, feature, used_values)
-                if value is not None:
-                    features[feature] = value
+            features = self._extract_liver_panel_features(text)
 
             if not features:
                 raise ValueError("No features could be extracted from the image")
+            if len(features) < self.min_feature_count:
+                raise ValueError(
+                    f"Only extracted {len(features)} of {len(self.required_features)} required liver features"
+                )
 
             input_df = self.convert_to_model_input(features)
             if input_df is None:
@@ -148,7 +151,12 @@ class LiverDiseasePredictor:
 
             result = "Liver Disease" if prediction == 1 else "No Liver Disease"
 
-            shap_rows = compute_shap_explanation(self.model, input_df, top_k=6)
+            shap_rows = compute_shap_explanation(
+                self.model,
+                input_df,
+                top_k=6,
+                present_features=features.keys(),
+            )
             explanation = None
             if shap_rows:
                 explanation = {
@@ -160,6 +168,8 @@ class LiverDiseasePredictor:
                     ),
                 }
             return result, confidence, explanation
+        except OCRConfigurationError:
+            raise
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
             return None, None, None

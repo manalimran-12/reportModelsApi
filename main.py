@@ -7,6 +7,7 @@ from pneumonia_predictor import PneumoniaPredictor
 from breast_predictor import BreastCancerPredictor
 from heart_predictor import HeartDiseasePredictor
 from liver_predictor import LiverDiseasePredictor
+from ocr_utils import OCRConfigurationError
 
 app = FastAPI(title="Medical Prediction API")
 
@@ -47,8 +48,12 @@ async def predict_pneumonia(request: PneumoniaPredictionRequest):
 
         predictor = PneumoniaPredictor()
         result = predictor.predict(img_path)
-        if result is None:
-            raise HTTPException(status_code=400, detail="Failed to process the image")
+        # Predictor returns either None or a 3-tuple. Treat (None, None, None) as failure too.
+        if result is None or result[0] is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Model could not process this input. See server logs for details.",
+            )
 
         prediction, confidence, explanation = result
         return PredictionResponse(
@@ -59,6 +64,8 @@ async def predict_pneumonia(request: PneumoniaPredictionRequest):
         )
     except HTTPException:
         raise
+    except OCRConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -86,8 +93,12 @@ async def predict_medical(request: MedicalPredictionRequest):
             )
 
         result = predictor.predict(img_path)
-        if result is None:
-            raise HTTPException(status_code=400, detail="Failed to process the image")
+        # Predictor returns either None or a 3-tuple. Treat (None, None, None) as failure too.
+        if result is None or result[0] is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Model could not process this input. See server logs for details.",
+            )
 
         prediction, confidence, explanation = result
         return PredictionResponse(
@@ -98,6 +109,8 @@ async def predict_medical(request: MedicalPredictionRequest):
         )
     except HTTPException:
         raise
+    except OCRConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

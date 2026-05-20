@@ -20,7 +20,15 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Copy the pneumonia model file (`pneumonia.h5`) to a `models` directory:
+4. Install Tesseract OCR for the medical report predictors:
+```bash
+# Windows example
+# Install Tesseract OCR, then either:
+# 1. add the install directory to PATH, or
+# 2. set TESSERACT_PATH to the full path of tesseract.exe
+```
+
+5. Copy the pneumonia model file (`pneumonia.h5`) to a `models` directory:
 ```bash
 mkdir models
 # Copy your pneumonia.h5 model file to models directory
