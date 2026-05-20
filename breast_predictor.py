@@ -4,16 +4,9 @@ import pandas as pd
 import numpy as np
 import pickle
 import re
-import os
 from sklearn.preprocessing import StandardScaler
 from explanations import compute_shap_explanation
-
-# Configure Tesseract path (can be overridden via TESSERACT_PATH env var)
-TESSERACT_PATH = os.environ.get(
-    'TESSERACT_PATH',
-    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-)
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+from ocr_utils import OCRConfigurationError, configure_tesseract
 
 class BreastCancerPredictor:
     def __init__(self, model_path='models/breast_cancer.pkl'):
@@ -32,6 +25,7 @@ class BreastCancerPredictor:
 
     def preprocess_image(self, image_path):
         try:
+            configure_tesseract()
             img = cv2.imread(image_path)
             if img is None:
                 raise ValueError("Could not read image file")
@@ -50,6 +44,8 @@ class BreastCancerPredictor:
             text = re.sub(r'\s+', ' ', text).strip()
 
             return text
+        except OCRConfigurationError:
+            raise
         except Exception as e:
             print(f"Error processing image: {str(e)}")
             return None
@@ -129,6 +125,8 @@ class BreastCancerPredictor:
                     ),
                 }
             return result, confidence, explanation
+        except OCRConfigurationError:
+            raise
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
             return None, None, None

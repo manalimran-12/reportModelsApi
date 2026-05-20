@@ -98,7 +98,7 @@ def save_gradcam_overlay(original_img_path, heatmap, output_path, intensity=0.45
 
 # ---------- SHAP (breast / heart / liver) ----------
 
-def compute_shap_explanation(model, input_df, top_k=6):
+def compute_shap_explanation(model, input_df, top_k=6, present_features=None):
     """
     Returns a list of {feature, value, shapValue, effect} sorted by |shapValue|.
     Falls back gracefully to None if SHAP can't explain this model.
@@ -122,10 +122,13 @@ def compute_shap_explanation(model, input_df, top_k=6):
         features = list(input_df.columns)
         raw_values = input_df.iloc[0].tolist()
 
+        present_feature_set = set(present_features or [])
         rows = []
         for i, f in enumerate(features):
             v = float(raw_values[i])
             sv = float(vals[i])
+            if present_feature_set and f not in present_feature_set:
+                continue
             # Skip features that were missing (0) AND had near-zero SHAP contribution
             if v == 0 and abs(sv) < 1e-6:
                 continue
